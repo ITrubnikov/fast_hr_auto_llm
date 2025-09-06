@@ -15,6 +15,7 @@ import fitz  # PyMuPDF
 from PIL import Image
 from cv_analyzer import CVAnalyzer
 from dotenv import load_dotenv
+from kafka import KafkaProducer
 
 load_dotenv()
 
@@ -28,6 +29,8 @@ class CandidateResult:
     concerns: List[str]
     cv_summary: str
     interview_questions: List[str]
+    email: str
+    cv_text: str
 
 class StreamlitCVAnalyzer:
     def __init__(self):
@@ -40,7 +43,7 @@ class StreamlitCVAnalyzer:
         self.openrouter_key = (raw_key or "").strip().strip('"').strip("'")
         self.ocr_openrouter_model = os.getenv(
             "OCR_OPENROUTER_MODEL",
-            "google/gemini-2.5-flash-image-preview:free",
+            "meta-llama/llama-3.2-11b-vision-instruct:free",
         )
         # Автопереключение на OpenRouter, если есть валидный ключ
         if self.ocr_provider != "openrouter" and self.openrouter_key:
@@ -50,6 +53,22 @@ class StreamlitCVAnalyzer:
             model_name=os.getenv("OPENROUTER_LLM_MODEL", "google/gemma-3-27b-it:free"),
             model_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         )
+
+        # Kafka config
+        self.kafka_bootstrap = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "").strip()
+        self.kafka_topic = os.getenv("KAFKA_TOPIC", "").strip()
+        self.kafka_producer = None
+        if self.kafka_bootstrap and self.kafka_topic:
+            try:
+                self.kafka_producer = KafkaProducer(
+                    bootstrap_servers=[s.strip() for s in self.kafka_bootstrap.split(",") if s.strip()],
+                    value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode("utf-8"),
+                    linger_ms=50,
+                    retries=3,
+                    max_in_flight_requests_per_connection=1,
+                )
+            except Exception as e:
+                st.warning(f"Kafka недоступна: {e}")
 
     async def process_pdf_with_api(self, file_path: str) -> str:
         try:
@@ -98,8 +117,13 @@ class StreamlitCVAnalyzer:
             img_bytes = buf.getvalue()
             img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
+            # Всегда читаем актуальную модель из окружения на момент вызова
+            current_ocr_model = os.getenv("OCR_OPENROUTER_MODEL", self.ocr_openrouter_model)
+            if not current_ocr_model:
+                current_ocr_model = self.ocr_openrouter_model
+
             payload = {
-                "model": self.ocr_openrouter_model,
+                "model": current_ocr_model,
                 "messages": [
                     {
                         "role": "user",
@@ -199,6 +223,10 @@ class StreamlitCVAnalyzer:
                 progress_bar.progress(0.6 + (i) / len(cv_texts) * 0.4)
                 try:
                     analysis = await self.cv_analyzer.analyze_cv(cv_text, job_description)
+                    # Извлечение email из текста резюме (первое вхождение)
+                    import re as _re
+                    email_match = _re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", cv_text)
+                    candidate_email = email_match.group(0) if email_match else ""
                     result = CandidateResult(
                         name=analysis.candidate_name,
                         filename=filename,
@@ -207,7 +235,9 @@ class StreamlitCVAnalyzer:
                         key_strengths=analysis.key_strengths,
                         concerns=analysis.concerns,
                         cv_summary=analysis.cv_summary,
-                        interview_questions=analysis.interview_questions
+                        interview_questions=analysis.interview_questions,
+                        email=candidate_email,
+                        cv_text=cv_text,
                     )
                     results.append(result)
                 except Exception as e:
@@ -218,26 +248,60 @@ class StreamlitCVAnalyzer:
             status_text.text("Анализ завершен!")
         return results
 
+    def publish_to_kafka(self, items_json: list) -> None:
+        if not self.kafka_producer or not self.kafka_topic:
+            return
+        try:
+            self.kafka_producer.send(self.kafka_topic, items_json)
+            self.kafka_producer.flush(timeout=5)
+        except Exception as e:
+            st.warning(f"Ошибка отправки в Kafka: {e}")
+
 def main():
     st.set_page_config(
         page_title="HR Auto System - Этап 1 из 4: Анализ CV",
-        page_icon="📄",
+        page_icon="",
         layout="wide"
     )
-    st.title("🎯 HR Auto System - Этап 1: Анализ CV")
-    st.caption("📋 Этап 1 из 4: Анализ резюме → 📅 Планирование встреч → 🎤 Собеседование → ✅ Принятие решения")
+    st.title("HR Auto System - Этап 1: Анализ CV")
+    st.caption("Этап 1 из 4: Анализ резюме → Планирование встреч → Собеседование → Принятие решения")
     st.markdown("---")
-    
+
+    # Инициализируем/пересоздаём анализатор ДО отрисовки сайдбара,
+    # чтобы метки моделей соответствовали актуальным переменным окружения
+    if 'analyzer' not in st.session_state:
+        try:
+            st.session_state.analyzer = StreamlitCVAnalyzer()
+        except Exception as e:
+            st.error(f"Ошибка инициализации анализатора: {e}")
+            return
+    else:
+        # Пересоздаём анализатор, если модель в окружении изменилась
+        try:
+            env_model = os.getenv("OCR_OPENROUTER_MODEL", "meta-llama/llama-3.2-11b-vision-instruct:free")
+            if getattr(st.session_state.analyzer, 'ocr_openrouter_model', None) != env_model:
+                st.session_state.analyzer = StreamlitCVAnalyzer()
+        except Exception:
+            st.session_state.analyzer = StreamlitCVAnalyzer()
+
     with st.sidebar:
-        st.header("⚙️ Настройки")
-        st.subheader("🤖 Используемые модели")
-        ocr_label = "OpenRouter Gemini 2.5 Flash (free)" if os.getenv("OCR_PROVIDER", "api").lower() == "openrouter" else "OCR API"
-        st.text(f"👁️ OCR: {ocr_label}")
-        st.text(f"🧠 Анализ: {os.getenv('OPENROUTER_LLM_MODEL', 'google/gemma-3-27b-it:free')}")
+        st.header("Настройки")
+        st.subheader("Используемые модели")
+        ocr_is_or = os.getenv("OCR_PROVIDER", "api").lower() == "openrouter"
+        # Приоритет у значения из окружения, чтобы сразу отображалась актуальная модель
+        env_ocr_model = os.getenv("OCR_OPENROUTER_MODEL", "meta-llama/llama-3.2-11b-vision-instruct:free")
+        try:
+            analyzer_model = getattr(st.session_state.get('analyzer', None), 'ocr_openrouter_model', None)
+        except Exception:
+            analyzer_model = None
+        current_ocr_model = env_ocr_model or analyzer_model or "meta-llama/llama-3.2-11b-vision-instruct:free"
+        ocr_label = f"OpenRouter {current_ocr_model}" if ocr_is_or else "OCR API"
+        st.text(f"OCR: {ocr_label}")
+        st.text(f"Анализ: {os.getenv('OPENROUTER_LLM_MODEL', 'google/gemma-3-27b-it:free')}")
         st.markdown("---")
-        
+
         if 'results' in st.session_state and st.session_state.results:
-            st.subheader("📊 Экспорт результатов")
+            st.subheader("Экспорт результатов")
             if st.button("Скачать результаты (JSON)"):
                 results_json = json.dumps([
                     {
@@ -252,22 +316,16 @@ def main():
                     } for r in st.session_state.results
                 ], ensure_ascii=False, indent=2)
                 st.download_button(
-                    label="📥 Скачать JSON",
+                    label="Скачать JSON",
                     data=results_json,
                     file_name=f"cv_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                     mime="application/json"
                 )
     
-    if 'analyzer' not in st.session_state:
-        try:
-            st.session_state.analyzer = StreamlitCVAnalyzer()
-        except Exception as e:
-            st.error(f"Ошибка инициализации анализатора: {e}")
-            return
     
     col1, col2 = st.columns([1, 1])
     with col1:
-        st.header("📋 Описание вакансии")
+        st.header("Описание вакансии")
         job_description = st.text_area(
             "Введите требования к кандидату:",
             height=300,
@@ -290,7 +348,7 @@ def main():
         )
     
     with col2:
-        st.header("📄 Загрузка CV")
+        st.header("Загрузка CV")
         uploaded_files = st.file_uploader(
             "Выберите файлы CV (PDF):",
             type=['pdf'],
@@ -312,7 +370,7 @@ def main():
             
             st.success(f"Загружено файлов: {len(uploaded_files)}")
             for file in uploaded_files:
-                st.text(f"📎 {file.name} ({file.size / 1024:.1f} KB)")
+                st.text(f"{file.name} ({file.size / 1024:.1f} KB)")
         else:
             if 'previous_files' in st.session_state:
                 st.session_state.previous_files = []
@@ -333,10 +391,10 @@ def main():
         analysis_needed = False
     
     if analysis_needed:
-        button_text = "🚀 Запустить анализ"
+        button_text = "Запустить анализ"
         button_help = "Анализировать загруженные CV"
     else:
-        button_text = "🔄 Повторить анализ"
+        button_text = "Повторить анализ"
         button_help = "Повторно анализировать те же файлы"
     
     if st.button(button_text, type="primary", disabled=not can_analyze, help=button_help):
@@ -347,6 +405,8 @@ def main():
         else:
             with st.spinner("Анализируем CV..."):
                 try:
+                    # Уникальный идентификатор запроса анализа
+                    st.session_state.request_id = uuid.uuid4().hex
                     results = asyncio.run(
                         st.session_state.analyzer.process_uploaded_files(uploaded_files, job_description)
                     )
@@ -360,7 +420,7 @@ def main():
         'previous_files' in st.session_state and uploaded_files and
         set([f.name for f in uploaded_files]) == set(st.session_state.previous_files)):
         st.markdown("---")
-        st.header("📊 Результаты анализа")
+        st.header("Результаты анализа")
         results = sorted(st.session_state.results, key=lambda x: x.score, reverse=True)
         
         col1, col2, col3, col4 = st.columns(4)
@@ -377,39 +437,71 @@ def main():
             st.metric("Слабые (1-4)", low_score)
         
         for i, result in enumerate(results):
-            with st.expander(f"🏅 {result.name} - Оценка: {result.score}/10", expanded=i < 3):
+            with st.expander(f"{result.name} - Оценка: {result.score}/10", expanded=i < 3):
                 col1, col2 = st.columns([2, 1])
                 with col1:
-                    st.subheader("📝 Обоснование оценки")
+                    st.subheader("Обоснование оценки")
                     st.write(result.reasoning)
-                    st.subheader("💪 Ключевые преимущества")
+                    st.subheader("Ключевые преимущества")
                     for strength in result.key_strengths:
-                        st.write(f"✅ {strength}")
+                        st.write(f"{strength}")
                     if result.concerns:
-                        st.subheader("⚠️ Замечания")
+                        st.subheader("Замечания")
                         for concern in result.concerns:
-                            st.write(f"❌ {concern}")
+                            st.write(f"{concern}")
                 with col2:
                     score_color = "green" if result.score >= 8 else "orange" if result.score >= 5 else "red"
                     st.metric("Оценка", f"{result.score}/10")
-                    st.info(f"📁 Файл: {result.filename}")
+                    st.info(f"Файл: {result.filename}")
                     if result.cv_summary:
-                        st.subheader("📋 Краткое резюме")
+                        st.subheader("Краткое резюме")
                         st.write(result.cv_summary)
                 
                 # Новая секция: Вопросы для собеседования
                 if result.interview_questions:
                     st.markdown("---")
-                    st.subheader("❓ Вопросы для первичного собеседования")
+                    st.subheader("Вопросы для первичного собеседования")
                     st.caption("Персонализированные вопросы на основе анализа резюме:")
                     for idx, question in enumerate(result.interview_questions, 1):
                         st.write(f"**{idx}.** {question}")
                     
                     # Кнопка для копирования вопросов
                     questions_text = "\n".join([f"{idx}. {q}" for idx, q in enumerate(result.interview_questions, 1)])
-                    if st.button(f"📋 Копировать вопросы для {result.name}", key=f"copy_questions_{result.filename}"):
+                    if st.button(f"Копировать вопросы для {result.name}", key=f"copy_questions_{result.filename}"):
                         st.code(questions_text, language="text")
                         st.success("Вопросы готовы для копирования!")
+
+        # Строгий JSON для n8n
+        try:
+            vacancy_text = st.session_state.get("job_description", "")
+            request_id = st.session_state.get("request_id") or uuid.uuid4().hex
+            def _conclusion(score: int) -> str:
+                if score >= 8:
+                    return "Высокая пригодность"
+                if score >= 5:
+                    return "Средняя пригодность"
+                return "Низкая пригодность"
+
+            n8n_items = [
+                {
+                    "request_id": request_id,
+                    "Вакансия": vacancy_text,
+                    "текст резюме": r.cv_text,
+                    "Вывод о пригодности": _conclusion(r.score),
+                    "Балы": r.score,
+                    "email": r.email,
+                    "вопросы к соискателю": r.interview_questions,
+                }
+                for r in results
+            ]
+            st.markdown("---")
+            st.subheader("JSON для n8n")
+            st.code(json.dumps(n8n_items, ensure_ascii=False, indent=2), language="json")
+
+            # Публикация в Kafka (если настроена)
+            st.session_state.analyzer.publish_to_kafka(n8n_items)
+        except Exception as _e:
+            st.error(f"Ошибка формирования JSON для n8n: {_e}")
 
 if __name__ == "__main__":
     main()

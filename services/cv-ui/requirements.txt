@@ -12,3 +12,4 @@ PyMuPDF
 # fastapi duplicate removed
 streamlit
 # python-dotenv duplicate removed
+kafka-python
