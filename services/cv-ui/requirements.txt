@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+langchain
+langchain-openai
+openai
+httpx
+Pillow
+pypdf
+PyMuPDF
+# fastapi duplicate removed
+streamlit
+# python-dotenv duplicate removed

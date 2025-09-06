@@ -1,0 +1,35 @@
+services:
+
+  cv_ui:
+    build:
+      context: ./services/cv-ui
+      dockerfile: Dockerfile.ui
+    env_file:
+      - .env
+    ports:
+      - "8503:8503"
+    networks:
+      - ocr_network
+    restart: unless-stopped
+
+  kafka_rest_producer:
+    build:
+      context: ./services/kafka-rest-producer
+      dockerfile: Dockerfile
+    ports:
+      - "8090:8090"
+    environment:
+      - JAVA_OPTS=-Xms128m -Xmx256m
+      - APP_KAFKA_BOOTSTRAP_SERVERS=kafka1:19092,kafka2:19093,kafka3:19094
+    networks:
+      - ocr_network
+      - kafka_secure_net
+    restart: unless-stopped
+
+networks:
+  ocr_network:
+    external: true
+    name: ocr_network
+  kafka_secure_net:
+    external: true
+    name: kafka-secure_default
