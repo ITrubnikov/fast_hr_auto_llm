@@ -16,6 +16,8 @@ from PIL import Image
 from cv_analyzer import CVAnalyzer
 from dotenv import load_dotenv
 from kafka import KafkaProducer
+from kafka.errors import KafkaError, NoBrokersAvailable
+import time
 
 load_dotenv()
 
@@ -57,18 +59,83 @@ class StreamlitCVAnalyzer:
         # Kafka config
         self.kafka_bootstrap = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "").strip()
         self.kafka_topic = os.getenv("KAFKA_TOPIC", "").strip()
+        self.kafka_connect_max_retries = int(os.getenv("KAFKA_CONNECT_MAX_RETRIES", "8") or 8)
+        self.kafka_connect_backoff_seconds = float(os.getenv("KAFKA_CONNECT_BACKOFF_SECONDS", "2") or 2)
         self.kafka_producer = None
         if self.kafka_bootstrap and self.kafka_topic:
+            # Первая попытка создать продьюсер (без долгой блокировки UI)
             try:
-                self.kafka_producer = KafkaProducer(
-                    bootstrap_servers=[s.strip() for s in self.kafka_bootstrap.split(",") if s.strip()],
-                    value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode("utf-8"),
-                    linger_ms=50,
-                    retries=3,
-                    max_in_flight_requests_per_connection=1,
-                )
+                self.kafka_producer = self._create_kafka_producer()
             except Exception as e:
-                st.warning(f"Kafka недоступна: {e}")
+                st.warning(f"Kafka недоступна при старте: {e}")
+
+    def _build_kafka_config(self) -> dict:
+        servers = [s.strip() for s in self.kafka_bootstrap.split(",") if s.strip()]
+        cfg = {
+            "bootstrap_servers": servers,
+            "value_serializer": lambda v: json.dumps(v, ensure_ascii=False).encode("utf-8"),
+            "acks": "all",
+            "linger_ms": 50,
+            "retries": 3,
+            "max_in_flight_requests_per_connection": 1,
+            "request_timeout_ms": 10000,
+            "retry_backoff_ms": 500,
+            "metadata_max_age_ms": 30000,
+        }
+        security_protocol = (os.getenv("KAFKA_SECURITY_PROTOCOL", "") or "").strip()
+        if security_protocol:
+            cfg["security_protocol"] = security_protocol
+        sasl_mechanism = (os.getenv("KAFKA_SASL_MECHANISM", "") or "").strip()
+        if sasl_mechanism:
+            cfg["sasl_mechanism"] = sasl_mechanism
+        sasl_username = os.getenv("KAFKA_SASL_USERNAME")
+        sasl_password = os.getenv("KAFKA_SASL_PASSWORD")
+        if sasl_username and sasl_password:
+            cfg["sasl_plain_username"] = sasl_username
+            cfg["sasl_plain_password"] = sasl_password
+        ssl_cafile = os.getenv("KAFKA_SSL_CAFILE")
+        if ssl_cafile:
+            cfg["ssl_cafile"] = ssl_cafile
+        return cfg
+
+    def _create_kafka_producer(self) -> KafkaProducer:
+        cfg = self._build_kafka_config()
+        producer = KafkaProducer(**cfg)
+        return producer
+
+    def _ensure_kafka_connected_with_retries(self) -> bool:
+        if not (self.kafka_bootstrap and self.kafka_topic):
+            return False
+        # Быстрый успешный путь
+        if self.kafka_producer is not None:
+            try:
+                if self.kafka_producer.bootstrap_connected():
+                    return True
+            except Exception:
+                self.kafka_producer = None
+
+        attempts = 0
+        backoff = max(self.kafka_connect_backoff_seconds, 0.5)
+        last_error: Exception | None = None
+        while attempts < self.kafka_connect_max_retries:
+            attempts += 1
+            try:
+                self.kafka_producer = self._create_kafka_producer()
+                # Проверяем доступность метаданных/брокера
+                try:
+                    _ = self.kafka_producer.partitions_for(self.kafka_topic)
+                except Exception:
+                    pass
+                if self.kafka_producer.bootstrap_connected():
+                    return True
+            except (NoBrokersAvailable, KafkaError, Exception) as e:
+                last_error = e
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 30)
+
+        if last_error:
+            st.warning(f"Kafka недоступна: {last_error}")
+        return False
 
     async def process_pdf_with_api(self, file_path: str) -> str:
         try:
@@ -250,11 +317,22 @@ class StreamlitCVAnalyzer:
 
     def publish_to_kafka(self, items_json: list) -> None:
         if not self.kafka_producer or not self.kafka_topic:
-            return
+            # Пытаемся подключиться лениво при первой отправке
+            if not self._ensure_kafka_connected_with_retries():
+                return
         try:
             self.kafka_producer.send(self.kafka_topic, items_json)
             self.kafka_producer.flush(timeout=5)
-        except Exception as e:
+        except (KafkaError, Exception) as e:
+            # Пытаемся разово пересоздать продьюсер и повторить
+            self.kafka_producer = None
+            if self._ensure_kafka_connected_with_retries():
+                try:
+                    self.kafka_producer.send(self.kafka_topic, items_json)
+                    self.kafka_producer.flush(timeout=5)
+                    return
+                except Exception:
+                    pass
             st.warning(f"Ошибка отправки в Kafka: {e}")
 
 def main():
@@ -484,13 +562,13 @@ def main():
 
             n8n_items = [
                 {
-                    "request_id": request_id,
-                    "Вакансия": vacancy_text,
-                    "текст резюме": r.cv_text,
-                    "Вывод о пригодности": _conclusion(r.score),
-                    "Балы": r.score,
+                    "requestId": request_id,
+                    "vacancy": vacancy_text,
+                    "cvText": r.cv_text,
+                    "suitabilityConclusion": _conclusion(r.score),
+                    "score": r.score,
                     "email": r.email,
-                    "вопросы к соискателю": r.interview_questions,
+                    "questionsForApplicant": r.interview_questions,
                 }
                 for r in results
             ]

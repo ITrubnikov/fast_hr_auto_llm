@@ -10,6 +10,7 @@ services:
       - "8503:8503"
     networks:
       - ocr_network
+      - kafka_secure_net
     restart: unless-stopped
 
   kafka_rest_producer:
