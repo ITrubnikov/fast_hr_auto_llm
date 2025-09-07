@@ -13,3 +13,9 @@ PyMuPDF
 streamlit
 # python-dotenv duplicate removed
 kafka-python
+# Дополнительные библиотеки для парсинга различных форматов резюме
+python-docx
+beautifulsoup4
+lxml
+html2text
+striprtf
