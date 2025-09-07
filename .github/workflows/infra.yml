@@ -1,0 +1,44 @@
+name: Infra Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Действие"
+        required: true
+        default: "up"
+        type: choice
+        options:
+          - up
+          - down
+      services:
+        description: "Сервисы через пробел (nginx_https postgres_hr)"
+        required: false
+        default: "nginx_https postgres_hr"
+        type: string
+
+jobs:
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Control infra services via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}"
+            if [ ! -f .env ] && [ -f env_example ]; then cp env_example .env; fi
+            docker network create ocr_network || true
+            if [ "${{ github.event.inputs.action }}" = "up" ]; then
+              docker compose -f docker-compose.yaml up -d ${{ github.event.inputs.services }}
+            else
+              docker compose -f docker-compose.yaml down ${{ github.event.inputs.services }} || true
+            fi
+

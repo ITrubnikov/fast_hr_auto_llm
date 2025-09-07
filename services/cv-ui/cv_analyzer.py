@@ -31,6 +31,10 @@ class CVAnalyzer:
     ) -> None:
         # LangChain ChatOpenAI (langchain-openai) ожидает параметры base_url и api_key
         import os
+        from dotenv import load_dotenv
+        
+        # Загружаем переменные окружения из .env файла
+        load_dotenv("../../.env")
 
         raw_key = os.getenv(api_key_env) or os.getenv("OPENAI_API_KEY", "")
         api_key = (raw_key or "").strip().strip('"').strip("'")

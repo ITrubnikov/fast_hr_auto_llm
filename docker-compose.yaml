@@ -55,6 +55,22 @@ services:
       - kafka_secure_net
     restart: unless-stopped
 
+  nginx_https:
+    image: nginx:alpine
+    container_name: nginx_https
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx-https/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx-https/certs:/etc/nginx/certs:ro
+      - "./cv data:/srv/cv-data:ro"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - hr_network
+    restart: unless-stopped
+
 networks:
   ocr_network:
     external: true

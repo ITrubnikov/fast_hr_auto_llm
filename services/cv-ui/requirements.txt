@@ -14,3 +14,9 @@ streamlit
 # python-dotenv duplicate removed
 kafka-python
 asyncpg==0.29.0
+# Дополнительные библиотеки для парсинга различных форматов резюме
+python-docx
+beautifulsoup4
+lxml
+html2text
+striprtf

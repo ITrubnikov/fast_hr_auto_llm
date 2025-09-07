@@ -14,13 +14,14 @@ import io
 import fitz  # PyMuPDF
 from PIL import Image
 from cv_analyzer import CVAnalyzer
+from file_parsers import FileParser, extract_text_from_file
 from dotenv import load_dotenv
 from kafka import KafkaProducer
 from kafka.errors import KafkaError, NoBrokersAvailable
 import time
 import asyncpg
 
-load_dotenv()
+load_dotenv("../../.env")
 
 @dataclass
 class CandidateResult:
@@ -346,6 +347,12 @@ class StreamlitCVAnalyzer:
                 status_text.text(f"Извлекаем текст из {Path(file_path).name}...")
                 progress_bar.progress((i) / len(file_paths) * 0.6)
                 try:
+                    # Проверяем поддерживаемые форматы
+                    if not FileParser.is_supported_file(file_path):
+                        st.warning(f"Неподдерживаемый формат файла: {Path(file_path).name}")
+                        continue
+                    
+                    # Обработка PDF файлов (через OCR)
                     if file_path.lower().endswith('.pdf'):
                         if self.ocr_provider == "openrouter":
                             cv_text = await self.process_pdf_with_openrouter(file_path)
@@ -353,8 +360,13 @@ class StreamlitCVAnalyzer:
                             cv_text = await self.process_pdf_with_api(file_path)
                         cv_texts[save_filename] = cv_text
                     else:
-                        st.warning(f"Неподдерживаемый формат файла: {Path(file_path).name}")
-                        continue
+                        # Обработка других форматов (DOC, DOCX, TXT, RTF, HTML)
+                        cv_text = extract_text_from_file(file_path)
+                        if cv_text.strip():
+                            cv_texts[save_filename] = cv_text
+                        else:
+                            st.warning(f"Не удалось извлечь текст из файла: {Path(file_path).name}")
+                            continue
                 except Exception as e:
                     st.error(f"Ошибка при обработке {Path(file_path).name}: {str(e)}")
                     continue
@@ -584,6 +596,17 @@ def main():
         st.text(f"OCR: {ocr_label}")
         st.text(f"Анализ: {os.getenv('OPENROUTER_LLM_MODEL', 'google/gemma-3-27b-it:free')}")
         st.markdown("---")
+        
+        st.subheader("Поддерживаемые форматы")
+        st.markdown("""
+        **📄 PDF** - через OCR  
+        **📝 DOC/DOCX** - Microsoft Word  
+        **📄 TXT** - текстовые файлы  
+        **📝 MD** - Markdown файлы  
+        **📋 RTF** - Rich Text Format  
+        **🌐 HTML** - веб-страницы  
+        """)
+        st.markdown("---")
 
         if 'results' in st.session_state and st.session_state.results:
             st.subheader("Экспорт результатов")
@@ -647,10 +670,10 @@ def main():
     with col2:
         st.header("Загрузка CV")
         uploaded_files = st.file_uploader(
-            "Выберите файлы CV (PDF):",
-            type=['pdf'],
+            "Выберите файлы CV:",
+            type=['pdf', 'doc', 'docx', 'txt', 'rtf', 'html', 'htm', 'md'],
             accept_multiple_files=True,
-            help="Можете загрузить несколько файлов одновременно",
+            help="Поддерживаемые форматы: PDF, DOC, DOCX, TXT, RTF, HTML, MD. Можете загрузить несколько файлов одновременно",
             key="file_uploader"
         )
         
@@ -668,8 +691,38 @@ def main():
                     del st.session_state.vacancy_title
             
             st.success(f"Загружено файлов: {len(uploaded_files)}")
-            for file in uploaded_files:
-                st.text(f"{file.name} ({file.size / 1024:.1f} KB)")
+            
+            # Группируем файлы по типам для лучшего отображения
+            pdf_files = [f for f in uploaded_files if f.name.lower().endswith('.pdf')]
+            word_files = [f for f in uploaded_files if f.name.lower().endswith(('.doc', '.docx'))]
+            text_files = [f for f in uploaded_files if f.name.lower().endswith('.txt')]
+            markdown_files = [f for f in uploaded_files if f.name.lower().endswith('.md')]
+            other_files = [f for f in uploaded_files if not f.name.lower().endswith(('.pdf', '.doc', '.docx', '.txt', '.md'))]
+            
+            if pdf_files:
+                st.write("📄 **PDF файлы:**")
+                for file in pdf_files:
+                    st.text(f"  • {file.name} ({file.size / 1024:.1f} KB)")
+            
+            if word_files:
+                st.write("📝 **Word документы:**")
+                for file in word_files:
+                    st.text(f"  • {file.name} ({file.size / 1024:.1f} KB)")
+            
+            if text_files:
+                st.write("📄 **Текстовые файлы:**")
+                for file in text_files:
+                    st.text(f"  • {file.name} ({file.size / 1024:.1f} KB)")
+            
+            if markdown_files:
+                st.write("📝 **Markdown файлы:**")
+                for file in markdown_files:
+                    st.text(f"  • {file.name} ({file.size / 1024:.1f} KB)")
+            
+            if other_files:
+                st.write("📋 **Другие форматы:**")
+                for file in other_files:
+                    st.text(f"  • {file.name} ({file.size / 1024:.1f} KB)")
         else:
             if 'previous_files' in st.session_state:
                 st.session_state.previous_files = []
