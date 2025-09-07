@@ -1,0 +1,45 @@
+name: "gigaam_preprocessor"
+platform: "onnxruntime_onnx"
+max_batch_size: 8
+version_policy: { all: {} }
+
+input [
+  {
+    name: "waveforms"
+    data_type: TYPE_FP32
+    dims: [-1]
+  },
+  {
+    name: "waveforms_lens"
+    data_type: TYPE_INT64
+    dims: [1]
+    reshape: { shape: [] }
+  }
+]
+
+output [
+  {
+    name: "features"
+    data_type: TYPE_FP32
+    dims: [ 64, -1 ]
+  },
+  {
+    name: "features_lens"
+    data_type: TYPE_INT64
+    dims: [1]
+    reshape: { shape: [] }
+  }
+]
+
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_CPU
+  }
+]
+
+dynamic_batching {
+  preferred_batch_size: [1, 2, 4]
+  max_queue_delay_microseconds: 2000
+}

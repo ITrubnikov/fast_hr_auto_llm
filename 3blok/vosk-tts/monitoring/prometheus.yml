@@ -1,0 +1,28 @@
+# Prometheus конфигурация для мониторинга Vosk-TTS
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "rules/*.yml"
+
+scrape_configs:
+  # Triton Inference Server метрики
+  - job_name: 'triton-tts'
+    static_configs:
+      - targets: ['triton-tts:8002']
+    scrape_interval: 10s
+    metrics_path: '/metrics'
+
+  # Vosk-TTS API метрики (если реализованы)
+  - job_name: 'vosk-tts-api'
+    static_configs:
+      - targets: ['vosk-tts-api:8081']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # Мониторинг самого Prometheus
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

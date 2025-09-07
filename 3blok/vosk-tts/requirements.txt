@@ -1,0 +1,27 @@
+# Vosk TTS сервер зависимости
+
+# Vosk TTS - последняя версия 
+vosk-tts>=0.3.59
+vosk>=0.3.45
+
+# ONNX Runtime для Triton (опционально)
+onnxruntime>=1.15.0
+tritonclient[all]>=2.34.0
+
+# Аудио обработка
+soundfile>=0.12.0
+numpy>=1.24.0
+librosa>=0.9.0
+
+# Веб фреймворк
+fastapi>=0.100.0
+uvicorn>=0.20.0
+python-multipart>=0.0.5
+
+# Конфигурация и логирование  
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+structlog>=23.0.0
+
+# Утилиты
+python-dotenv>=1.0.0
