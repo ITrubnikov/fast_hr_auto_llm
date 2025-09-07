@@ -4,7 +4,7 @@ import asyncio
 import uuid
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from kafka import KafkaProducer
 from kafka.errors import KafkaError, NoBrokersAvailable
 import time
+import asyncpg
 
 load_dotenv()
 
@@ -35,6 +36,76 @@ class CandidateResult:
     email: str
     preferred_contact: str  # Новое поле для способа связи
     cv_text: str
+
+class HRDatabaseClient:
+    """Клиент для работы с PostgreSQL базой данных HR системы"""
+    
+    def __init__(self):
+        self.db_url = os.getenv("DATABASE_URL", "postgresql://hr_user:hr_secure_password_2024@postgres_hr:5432/hr_system")
+        self.enabled = os.getenv("DATABASE_ENABLED", "true").lower() == "true"
+    
+    async def save_cv_analysis_results(
+        self, 
+        request_id: str,
+        vacancy_title: str, 
+        vacancy_description: str,
+        candidates_data: List[dict]
+    ) -> bool:
+        """Сохранение результатов анализа CV в БД"""
+        if not self.enabled:
+            return False
+            
+        try:
+            conn = await asyncpg.connect(self.db_url)
+            try:
+                # Используем функцию insert_cv_analysis_data из БД
+                result = await conn.fetchval(
+                    """
+                    SELECT insert_cv_analysis_data($1::UUID, $2, $3, $4::JSONB)
+                    """,
+                    uuid.UUID(request_id) if isinstance(request_id, str) else request_id,
+                    vacancy_title,
+                    vacancy_description,
+                    json.dumps(candidates_data)
+                )
+                st.success(f"✅ Данные сохранены в БД: {len(candidates_data)} кандидатов")
+                return True
+            finally:
+                await conn.close()
+        except Exception as e:
+            st.warning(f"⚠️ Ошибка сохранения в БД: {str(e)}")
+            return False
+    
+    async def get_request_statistics(self, request_id: str) -> Optional[dict]:
+        """Получение статистики по запросу"""
+        if not self.enabled:
+            return None
+            
+        try:
+            conn = await asyncpg.connect(self.db_url)
+            try:
+                row = await conn.fetchrow(
+                    """
+                    SELECT * FROM requests_statistics 
+                    WHERE request_id = $1::UUID
+                    """,
+                    uuid.UUID(request_id)
+                )
+                if row:
+                    return {
+                        'vacancy_title': row['vacancy_title'],
+                        'total_candidates': row['total_candidates'],
+                        'analyzed_candidates': row['analyzed_candidates'],
+                        'avg_cv_score': float(row['avg_cv_score']) if row['avg_cv_score'] else 0,
+                        'high_suitability': row['high_suitability'],
+                        'medium_suitability': row['medium_suitability'],
+                        'low_suitability': row['low_suitability']
+                    }
+                return None
+            finally:
+                await conn.close()
+        except Exception:
+            return None
 
 class StreamlitCVAnalyzer:
     def __init__(self):
@@ -57,6 +128,9 @@ class StreamlitCVAnalyzer:
             model_name=os.getenv("OPENROUTER_LLM_MODEL", "google/gemma-3-27b-it:free"),
             model_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         )
+        
+        # Клиент для работы с БД
+        self.db_client = HRDatabaseClient()
 
         # Kafka config
         self.kafka_bootstrap = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "").strip()
@@ -388,6 +462,66 @@ class StreamlitCVAnalyzer:
         # 6. Если вообще ничего не найдено
         return "", "❌ Контактная информация не найдена"
 
+    async def save_results_to_database(
+        self, 
+        results: List[CandidateResult], 
+        job_description: str, 
+        vacancy_title: str,
+        request_id: str
+    ) -> bool:
+        """Сохранение результатов анализа в PostgreSQL БД"""
+        try:
+            # Подготовка данных для БД
+            candidates_data = []
+            
+            for result in results:
+                # Функция для определения заключения по оценке
+                def _conclusion(score: int) -> str:
+                    if score >= 8:
+                        return "Высокая пригодность"
+                    if score >= 5:
+                        return "Средняя пригодность"
+                    return "Низкая пригодность"
+                
+                candidates_data.append({
+                    "candidateId": result.candidate_id,
+                    "candidateName": result.name,
+                    "email": result.email,
+                    "preferredContact": result.preferred_contact,
+                    "cvText": result.cv_text,
+                    "score": result.score,
+                    "reasoning": result.reasoning,
+                    "suitabilityConclusion": _conclusion(result.score),
+                    "questionsForApplicant": result.interview_questions,
+                    "keyStrengths": result.key_strengths,
+                    "concerns": result.concerns,
+                    "cvSummary": result.cv_summary
+                })
+            
+            # Сохранение в БД
+            success = await self.db_client.save_cv_analysis_results(
+                request_id, vacancy_title, job_description, candidates_data
+            )
+            
+            if success:
+                # Показ статистики
+                stats = await self.db_client.get_request_statistics(request_id)
+                if stats:
+                    st.info(f"""
+                    📊 **Статистика сохранена в БД:**
+                    - Кандидатов проанализировано: {stats['analyzed_candidates']}
+                    - Средняя оценка: {stats['avg_cv_score']:.1f}/10
+                    - Высокая пригодность: {stats['high_suitability']}
+                    - Средняя пригодность: {stats['medium_suitability']}  
+                    - Низкая пригодность: {stats['low_suitability']}
+                    """)
+            
+            return success
+            
+        except Exception as e:
+            st.error(f"❌ Ошибка при сохранении в БД: {str(e)}")
+            return False
+
     def publish_to_kafka(self, items_json: list) -> None:
         if not self.kafka_producer or not self.kafka_topic:
             # Пытаемся подключиться лениво при первой отправке
@@ -584,7 +718,21 @@ def main():
                     st.session_state.results = results
                     st.session_state.job_description = job_description
                     st.session_state.vacancy_title = vacancy_title
-                    st.success(f"Анализ завершен! Обработано кандидатов: {len(results)}")
+                    
+                    # Сохранение результатов в БД
+                    try:
+                        db_saved = asyncio.run(
+                            st.session_state.analyzer.save_results_to_database(
+                                results, job_description, vacancy_title, st.session_state.request_id
+                            )
+                        )
+                        if db_saved:
+                            st.success(f"✅ Анализ завершен! Обработано кандидатов: {len(results)}. Данные сохранены в БД.")
+                        else:
+                            st.success(f"⚠️ Анализ завершен! Обработано кандидатов: {len(results)}. БД недоступна.")
+                    except Exception as e:
+                        st.warning(f"Анализ завершен! Обработано кандидатов: {len(results)}. Ошибка БД: {e}")
+                        st.success(f"Анализ завершен! Обработано кандидатов: {len(results)}")
                 except Exception as e:
                     st.error(f"Ошибка при анализе: {str(e)}")
     

@@ -13,3 +13,4 @@ PyMuPDF
 streamlit
 # python-dotenv duplicate removed
 kafka-python
+asyncpg==0.29.0

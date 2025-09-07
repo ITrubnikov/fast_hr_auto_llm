@@ -10,6 +10,15 @@ KAFKA_TOPIC=step1
 KAFKA_CONNECT_MAX_RETRIES=8
 KAFKA_CONNECT_BACKOFF_SECONDS=2
 
+# PostgreSQL Database настройки
+DATABASE_URL=postgresql://hr_user:hr_secure_password_2024@postgres_hr:5432/hr_system
+DATABASE_ENABLED=true
+POSTGRES_HOST=postgres_hr
+POSTGRES_PORT=5432
+POSTGRES_DB=hr_system
+POSTGRES_USER=hr_user
+POSTGRES_PASSWORD=hr_secure_password_2024
+
 # Ниже параметры опциональны, только если кластер защищён (SASL/SSL):
 # KAFKA_SECURITY_PROTOCOL=SASL_PLAINTEXT   # или SASL_SSL, SSL
 # KAFKA_SASL_MECHANISM=PLAIN              # или SCRAM-SHA-256/512

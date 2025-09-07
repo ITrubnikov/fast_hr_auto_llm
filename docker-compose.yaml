@@ -1,5 +1,30 @@
 services:
 
+  # PostgreSQL Database для обмена данными между блоками
+  postgres_hr:
+    image: postgres:15-alpine
+    container_name: hr_postgres
+    environment:
+      POSTGRES_DB: hr_system
+      POSTGRES_USER: hr_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hr_secure_password_2024}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=ru_RU.UTF-8 --lc-ctype=ru_RU.UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_hr_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+      - ./database/backups:/backups
+    networks:
+      - hr_network
+      - kafka_secure_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hr_user -d hr_system"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   cv_ui:
     build:
       context: ./services/cv-ui
@@ -11,6 +36,9 @@ services:
     networks:
       - ocr_network
       - kafka_secure_net
+      - hr_network
+    depends_on:
+      - postgres_hr
     restart: unless-stopped
 
   kafka_rest_producer:
@@ -34,3 +62,11 @@ networks:
   kafka_secure_net:
     external: true
     name: kafka-secure_default
+  hr_network:
+    driver: bridge
+    name: hr_network
+
+volumes:
+  postgres_hr_data:
+    driver: local
+    name: hr_postgres_data
