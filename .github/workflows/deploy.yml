@@ -49,8 +49,9 @@ jobs:
             if [ ! -f .env ] && [ -f env_example ]; then cp env_example .env; fi
             # Убедимся, что внешняя сеть Docker существует (нужна для external: true)
             docker network create ocr_network || true
-            docker compose -f docker-compose.yaml pull || true
-            docker compose -f docker-compose.yaml up -d --build
+            docker compose -f docker-compose.yaml pull cv_ui kafka_rest_producer || true
+            # Поднимаем только приложение без зависимостей (Postgres/NGINX управляются отдельно)
+            docker compose -f docker-compose.yaml up -d --no-deps --build cv_ui kafka_rest_producer
             # После перезапуска контейнеров обновим policy routing (обновляет br-* интерфейс)
             if command -v systemctl >/dev/null 2>&1; then
               sudo systemctl restart docker-vpn-policy.service || true
