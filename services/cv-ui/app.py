@@ -23,6 +23,7 @@ load_dotenv()
 
 @dataclass
 class CandidateResult:
+    candidate_id: str  # Уникальный ID кандидата для базы данных
     name: str
     filename: str
     score: int
@@ -32,6 +33,7 @@ class CandidateResult:
     cv_summary: str
     interview_questions: List[str]
     email: str
+    preferred_contact: str  # Новое поле для способа связи
     cv_text: str
 
 class StreamlitCVAnalyzer:
@@ -290,11 +292,12 @@ class StreamlitCVAnalyzer:
                 progress_bar.progress(0.6 + (i) / len(cv_texts) * 0.4)
                 try:
                     analysis = await self.cv_analyzer.analyze_cv(cv_text, job_description)
-                    # Извлечение email из текста резюме (первое вхождение)
-                    import re as _re
-                    email_match = _re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", cv_text)
-                    candidate_email = email_match.group(0) if email_match else ""
+                    # Извлечение контактной информации с приоритетом email
+                    candidate_email, preferred_contact = self.extract_contact_info(cv_text)
+                    # Генерация уникального ID для кандидата
+                    candidate_id = f"cv_{uuid.uuid4().hex[:12]}"
                     result = CandidateResult(
+                        candidate_id=candidate_id,
                         name=analysis.candidate_name,
                         filename=filename,
                         score=analysis.score,
@@ -304,6 +307,7 @@ class StreamlitCVAnalyzer:
                         cv_summary=analysis.cv_summary,
                         interview_questions=analysis.interview_questions,
                         email=candidate_email,
+                        preferred_contact=preferred_contact,
                         cv_text=cv_text,
                     )
                     results.append(result)
@@ -314,6 +318,75 @@ class StreamlitCVAnalyzer:
             progress_bar.progress(1.0)
             status_text.text("Анализ завершен!")
         return results
+
+    def extract_contact_info(self, cv_text: str) -> tuple[str, str]:
+        """
+        Извлекает контактную информацию из резюме с приоритетом email.
+        Возвращает (email, preferred_contact_method)
+        """
+        import re as _re
+        
+        # 1. Поиск email (приоритет)
+        email_pattern = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+        email_match = _re.search(email_pattern, cv_text)
+        email = email_match.group(0) if email_match else ""
+        
+        if email:
+            return email, f"📧 {email}"
+        
+        # 2. Поиск телефона (если нет email)
+        phone_patterns = [
+            r"\+7[\s\-\(\)]?[\d\s\-\(\)]{10,}",  # +7 формат
+            r"8[\s\-\(\)]?[\d\s\-\(\)]{10,}",    # 8 формат
+            r"\+\d{1,3}[\s\-\(\)]?[\d\s\-\(\)]{7,}",  # международный
+            r"\b\d{3}[\s\-]?\d{3}[\s\-]?\d{4}\b",  # стандартный
+        ]
+        
+        for pattern in phone_patterns:
+            phone_match = _re.search(pattern, cv_text)
+            if phone_match:
+                phone = _re.sub(r"[\s\-\(\)]", "", phone_match.group(0))
+                return "", f"📞 {phone}"
+        
+        # 3. Поиск Telegram
+        telegram_patterns = [
+            r"@[\w\d_]+",  # @username
+            r"t\.me/[\w\d_]+",  # t.me/username
+            r"telegram\.me/[\w\d_]+",  # telegram.me/username
+        ]
+        
+        for pattern in telegram_patterns:
+            tg_match = _re.search(pattern, cv_text, _re.IGNORECASE)
+            if tg_match:
+                tg = tg_match.group(0)
+                return "", f"💬 Telegram: {tg}"
+        
+        # 4. Поиск LinkedIn
+        linkedin_patterns = [
+            r"linkedin\.com/in/[\w\d\-_]+",
+            r"linkedin\.com/profile/[\w\d\-_]+",
+        ]
+        
+        for pattern in linkedin_patterns:
+            li_match = _re.search(pattern, cv_text, _re.IGNORECASE)
+            if li_match:
+                li = li_match.group(0)
+                return "", f"💼 LinkedIn: {li}"
+        
+        # 5. Fallback - поиск любого контакта в тексте
+        contact_keywords = ["контакт", "связаться", "телефон", "почта", "email"]
+        lines = cv_text.split('\n')
+        
+        for line in lines:
+            line_lower = line.lower()
+            if any(keyword in line_lower for keyword in contact_keywords):
+                # Извлекаем строку с контактной информацией
+                clean_line = line.strip()
+                if len(clean_line) > 5 and len(clean_line) < 100:
+                    return "", f"📝 {clean_line}"
+        
+        # 6. Если вообще ничего не найдено
+        return "", "❌ Контактная информация не найдена"
 
     def publish_to_kafka(self, items_json: list) -> None:
         if not self.kafka_producer or not self.kafka_topic:
@@ -383,6 +456,8 @@ def main():
             if st.button("Скачать результаты (JSON)"):
                 results_json = json.dumps([
                     {
+                        'candidate_id': r.candidate_id,  # Уникальный ID для БД
+                        'vacancy_title': st.session_state.get('vacancy_title', ''),  # Название вакансии
                         'name': r.name,
                         'filename': r.filename,
                         'score': r.score,
@@ -390,7 +465,9 @@ def main():
                         'key_strengths': r.key_strengths,
                         'concerns': r.concerns,
                         'cv_summary': r.cv_summary,
-                        'interview_questions': r.interview_questions
+                        'interview_questions': r.interview_questions,
+                        'email': r.email,
+                        'preferred_contact': r.preferred_contact
                     } for r in st.session_state.results
                 ], ensure_ascii=False, indent=2)
                 st.download_button(
@@ -404,9 +481,17 @@ def main():
     col1, col2 = st.columns([1, 1])
     with col1:
         st.header("Описание вакансии")
+        
+        # Поле для названия вакансии (для второго блока)
+        vacancy_title = st.text_input(
+            "Название вакансии:",
+            placeholder="Senior Python Developer",
+            help="Укажите точное название позиции для собеседования"
+        )
+        
         job_description = st.text_area(
             "Введите требования к кандидату:",
-            height=300,
+            height=260,
             placeholder="""Пример:
 Требуется Senior Python Developer для разработки торговых систем.
 Обязательные требования:
@@ -445,6 +530,8 @@ def main():
                     del st.session_state.results
                 if 'job_description' in st.session_state:
                     del st.session_state.job_description
+                if 'vacancy_title' in st.session_state:
+                    del st.session_state.vacancy_title
             
             st.success(f"Загружено файлов: {len(uploaded_files)}")
             for file in uploaded_files:
@@ -456,14 +543,18 @@ def main():
                 del st.session_state.results
             if 'job_description' in st.session_state:
                 del st.session_state.job_description
+            if 'vacancy_title' in st.session_state:
+                del st.session_state.vacancy_title
     
     st.markdown("---")
-    can_analyze = job_description and uploaded_files
+    can_analyze = vacancy_title.strip() and job_description and uploaded_files
     analysis_needed = True
     
     if ('results' in st.session_state and 
         'job_description' in st.session_state and
+        'vacancy_title' in st.session_state and
         st.session_state.job_description == job_description and
+        st.session_state.vacancy_title == vacancy_title and
         uploaded_files and
         set([f.name for f in uploaded_files]) == set(st.session_state.previous_files)):
         analysis_needed = False
@@ -476,7 +567,9 @@ def main():
         button_help = "Повторно анализировать те же файлы"
     
     if st.button(button_text, type="primary", disabled=not can_analyze, help=button_help):
-        if not job_description.strip():
+        if not vacancy_title.strip():
+            st.error("Пожалуйста, введите название вакансии")
+        elif not job_description.strip():
             st.error("Пожалуйста, введите описание вакансии")
         elif not uploaded_files:
             st.error("Пожалуйста, загрузите файлы CV")
@@ -490,6 +583,7 @@ def main():
                     )
                     st.session_state.results = results
                     st.session_state.job_description = job_description
+                    st.session_state.vacancy_title = vacancy_title
                     st.success(f"Анализ завершен! Обработано кандидатов: {len(results)}")
                 except Exception as e:
                     st.error(f"Ошибка при анализе: {str(e)}")
@@ -531,6 +625,14 @@ def main():
                     score_color = "green" if result.score >= 8 else "orange" if result.score >= 5 else "red"
                     st.metric("Оценка", f"{result.score}/10")
                     st.info(f"Файл: {result.filename}")
+                    
+                    # ID кандидата для базы данных
+                    st.caption(f"🆔 ID: {result.candidate_id}")
+                    
+                    # Новое поле: Способ связи
+                    st.subheader("Способ связи")
+                    st.write(result.preferred_contact)
+                    
                     if result.cv_summary:
                         st.subheader("Краткое резюме")
                         st.write(result.cv_summary)
@@ -552,6 +654,7 @@ def main():
         # Строгий JSON для n8n
         try:
             vacancy_text = st.session_state.get("job_description", "")
+            vacancy_title_text = st.session_state.get("vacancy_title", "")
             request_id = st.session_state.get("request_id") or uuid.uuid4().hex
             def _conclusion(score: int) -> str:
                 if score >= 8:
@@ -562,12 +665,16 @@ def main():
 
             n8n_items = [
                 {
-                    "requestId": request_id,
+                    "candidateId": r.candidate_id,  # Уникальный ID для БД
+                    "requestId": request_id,        # ID сессии анализа
+                    "vacancyTitle": vacancy_title_text,  # 🆕 Название вакансии для второго блока
                     "vacancy": vacancy_text,
+                    "candidateName": r.name,
                     "cvText": r.cv_text,
                     "suitabilityConclusion": _conclusion(r.score),
                     "score": r.score,
                     "email": r.email,
+                    "preferredContact": r.preferred_contact,
                     "questionsForApplicant": r.interview_questions,
                 }
                 for r in results
