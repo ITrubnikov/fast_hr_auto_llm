@@ -17,7 +17,7 @@ services:
       - ./database/backups:/backups
     networks:
       - hr_network
-      - kafka_secure_net
+      # - kafka_secure_net  # Временно отключено для тестирования
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hr_user -d hr_system"]
@@ -35,7 +35,7 @@ services:
       - "8503:8503"
     networks:
       - ocr_network
-      - kafka_secure_net
+      # - kafka_secure_net  # Временно отключено для тестирования
       - hr_network
     depends_on:
       - postgres_hr
@@ -52,7 +52,24 @@ services:
       - APP_KAFKA_BOOTSTRAP_SERVERS=kafka1:19092,kafka2:19093,kafka3:19094
     networks:
       - ocr_network
-      - kafka_secure_net
+      # - kafka_secure_net  # Временно отключено для тестирования
+    restart: unless-stopped
+
+  # Блок 4: Анализатор отчетов о кандидатах
+  report_analyzer:
+    build:
+      context: ./services/report-analyzer
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - LLM_ENABLED=true
+    ports:
+      - "8504:8504"
+    networks:
+      - hr_network
+    depends_on:
+      - postgres_hr
     restart: unless-stopped
 
   nginx_https:
@@ -75,9 +92,9 @@ networks:
   ocr_network:
     external: true
     name: ocr_network
-  kafka_secure_net:
-    external: true
-    name: kafka-secure_default
+  # kafka_secure_net:  # Временно отключено для тестирования
+  #   external: true
+  #   name: kafka-secure_default
   hr_network:
     driver: bridge
     name: hr_network

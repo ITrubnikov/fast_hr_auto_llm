@@ -1,0 +1,8 @@
+streamlit==1.28.1
+asyncpg==0.29.0
+plotly==5.17.0
+pandas==2.0.3
+python-dotenv==1.0.0
+uuid
+langchain==0.1.0
+langchain-openai==0.0.2

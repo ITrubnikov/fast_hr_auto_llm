@@ -19,6 +19,10 @@ POSTGRES_DB=hr_system
 POSTGRES_USER=hr_user
 POSTGRES_PASSWORD=hr_secure_password_2024
 
+# LLM анализ для Report Analyzer (Блок 4)
+LLM_ENABLED=true
+# Используется тот же OPENROUTER_API_KEY что и выше
+
 # Ниже параметры опциональны, только если кластер защищён (SASL/SSL):
 # KAFKA_SECURITY_PROTOCOL=SASL_PLAINTEXT   # или SASL_SSL, SSL
 # KAFKA_SASL_MECHANISM=PLAIN              # или SCRAM-SHA-256/512
