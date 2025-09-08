@@ -1,0 +1,49 @@
+{
+  "openai_api_key": "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",
+  "max_depth": 5,
+  "min_score_threshold": 2,
+  "evaluation_prompt": "Оцените ответ разработчика по шкале 1-10, где 10 - отличный ответ.",
+  "speech_detection": {
+    "silence_duration": 3.0,
+    "min_speech_duration": 0.5,
+    "listening_timeout": 120,
+    "chunk_timeout": 0.05,
+    "threshold": 0.7,
+    "min_silence_duration": 0.5
+  },
+  "drivers": {
+    "audio_input": {
+      "type": "microphone",
+      "config": {
+        "sample_rate": 16000,
+        "chunk_size": 2400,
+        "channels": 1
+      }
+    },
+    "audio_output": {
+      "type": "speaker",
+      "config": {
+        "sample_rate": 22050,
+        "channels": 1
+      }
+    },
+    "tts": {
+      "type": "browser",
+      "config": {
+        "language": "ru",
+        "voice": "alloy",
+        "sample_rate": 22050,
+        "api_key": "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"
+      }
+    },
+    "asr": {
+      "type": "whisper",
+      "config": {
+        "api_key": "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",
+        "language": "ru",
+        "temperature": 0.0,
+        "response_format": "verbose_json"
+      }
+    }
+  }
+}
