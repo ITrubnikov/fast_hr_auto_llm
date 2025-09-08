@@ -23,6 +23,21 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt || true; fi
           python -m py_compile app.py cv_analyzer.py || true
 
+      - name: Prepare target dir with sudo (cleanup + ownership)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            set -euo pipefail
+            TARGET_PATH="${{ secrets.DEPLOY_PATH }}"
+            sudo mkdir -p "$TARGET_PATH"
+            sudo chown -R $USER:$USER "$TARGET_PATH"
+            # Чистим всё, кроме каталога 3blok, который разворачивается отдельным job
+            sudo find "$TARGET_PATH" -mindepth 1 -maxdepth 1 ! -name '3blok' -exec sudo rm -rf {} +
+
       - name: Upload repo to server via SCP
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -30,10 +45,11 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT }}
-          source: "."
+          source: "docker-compose.yaml,env_example,services/**,nginx-https/**,kafka-secure/**,database/**,README.md"
           target: "${{ secrets.DEPLOY_PATH }}"
           overwrite: true
-          rm: true
+          rm: false
+          debug: true
 
       - name: Deploy on server (docker compose up -d)
         uses: appleboy/ssh-action@v1.2.0
@@ -42,6 +58,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT }}
+          command_timeout: 60m
           script: |
             set -euo pipefail
             cd "${{ secrets.DEPLOY_PATH }}"
@@ -57,3 +74,71 @@ jobs:
               sudo systemctl restart docker-vpn-policy.service || true
             fi
             docker system prune -f --volumes || true
+
+  detect-3blok-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.filter.outputs.threeblok }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Filter changes in 3blok
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            threeblok:
+              - '3blok/**'
+
+  deploy-3blok:
+    needs: [detect-3blok-changes]
+    if: needs.detect-3blok-changes.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure ${DEPLOY_PATH}/3blok exists (sudo)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            set -euo pipefail
+            sudo mkdir -p "${{ secrets.DEPLOY_PATH }}/3blok"
+            sudo chown -R $USER:$USER "${{ secrets.DEPLOY_PATH }}/3blok"
+
+      - name: Upload only 3blok to server via SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          source: "3blok/docker-compose.yml,3blok/**"
+          target: "${{ secrets.DEPLOY_PATH }}/3blok"
+          overwrite: true
+          rm: false
+          debug: true
+
+      - name: Deploy 3blok stack (docker compose up -d)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          command_timeout: 90m
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}/3blok"
+            # Очистим старые логи/артефакты, создадим необходимые директории
+            sudo mkdir -p ./vosk-tts/logs ./vosk-tts/output
+            sudo chown -R $USER:$USER ./vosk-tts/logs ./vosk-tts/output
+            # Поднятие/обновление сервисов 3blok
+            sudo docker compose -f docker-compose.yml down || true
+            docker compose -f docker-compose.yml pull || true
+            docker compose -f docker-compose.yml up -d --build
