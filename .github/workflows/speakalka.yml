@@ -1,0 +1,42 @@
+name: Speakalka CI/CD
+
+on:
+  push:
+    paths:
+      - 'services/Speakalka/**'
+      - 'docker-compose.yaml'
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (local cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./services/Speakalka
+          file: ./services/Speakalka/Dockerfile
+          push: false
+          tags: speakalka:ci
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          script: |
+            set -e
+            cd ${{ secrets.DEPLOY_PATH }}
+            git pull
+            docker compose build speakalka --no-cache
+            docker compose up -d speakalka
+

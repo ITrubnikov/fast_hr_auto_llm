@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  interview-system:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: speakalka-interview
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-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}
+      - KAFKA_BOOTSTRAP_SERVERS=kafka1:19092,kafka2:19093
+      - KAFKA_TOPIC=step3
+    volumes:
+      # Монтируем директории для логов и записей
+      - ./logs:/app/logs
+      - ./recordings:/app/recordings
+      - ./static:/app/static
+      # Монтируем конфигурацию (опционально)
+      - ./interview_system/interview_config.json:/app/interview_config.json:ro
+    restart: unless-stopped
+    networks:
+      - kafka_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Ограничения ресурсов (опционально)
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+
+networks:
+  kafka_network:
+    external: true
+    name: margo_default
+
+  # Опциональный сервис для мониторинга (если нужен)
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: speakalka-nginx
+  #   ports:
+  #     - "80:80"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #   depends_on:
+  #     - interview-system
+  #   restart: unless-stopped
