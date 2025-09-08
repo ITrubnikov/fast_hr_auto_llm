@@ -72,36 +72,6 @@ services:
       - postgres_hr
     restart: unless-stopped
 
-  speakalka:
-    build:
-      context: ./services/Speakalka
-      dockerfile: Dockerfile
-    container_name: speakalka-interview
-    environment:
-      - PYTHONPATH=/app
-      - PYTHONUNBUFFERED=1
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - KAFKA_BOOTSTRAP_SERVERS=kafka1:19092,kafka2:19093,kafka3:19094
-      - KAFKA_TOPIC=step3
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./services/Speakalka/logs:/app/logs
-      - ./services/Speakalka/recordings:/app/recordings
-      - ./services/Speakalka/static:/app/static
-      - ./services/Speakalka/interview_system/interview_config.json:/app/interview_config.json:ro
-    depends_on:
-      - kafka_rest_producer
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    networks:
-      - kafka_secure_net
-      - hr_network
-    restart: unless-stopped
 
   nginx_https:
     image: nginx:alpine
