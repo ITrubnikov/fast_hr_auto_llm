@@ -53,18 +53,24 @@ jobs:
         run: |
           source .venv/bin/activate
           python - <<'PY'
-            from importlib import import_module
+            import sys
+            import importlib
+
             modules = [
-                'pyaudio','soundfile','scipy','torch','torchaudio','fastapi','uvicorn',
-                'websockets','requests','ffmpeg','langchain','langgraph','kafka'
+                'pyaudio', 'soundfile', 'scipy', 'torch', 'torchaudio', 'fastapi', 'uvicorn',
+                'websockets', 'requests', 'ffmpeg', 'langchain', 'langgraph', 'kafka'
             ]
+
+            ok = True
             for m in modules:
                 try:
-                    import_module(m)
+                    importlib.import_module(m)
                     print(f"OK {m}")
                 except Exception as e:
                     print(f"FAIL {m}: {e}")
-                    raise
+                    ok = False
+
+            sys.exit(0 if ok else 1)
           PY
 
 

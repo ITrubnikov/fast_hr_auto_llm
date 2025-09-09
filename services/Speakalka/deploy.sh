@@ -42,8 +42,32 @@ check_docker() {
     fi
 }
 
+# Обеспечить окружение по умолчанию (без .env)
+prepare_env_defaults() {
+    export OPENAI_API_KEY="${OPENAI_API_KEY:-dummy-key}"
+    export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-kafka1:19092,kafka2:19093}"
+    export KAFKA_TOPIC="${KAFKA_TOPIC:-step3}"
+}
+
+# Обеспечить внешнюю сеть для Kafka
+ensure_network() {
+    local net="margo_default"
+    if ! docker network inspect "$net" >/dev/null 2>&1; then
+        log "Создаю сеть $net"
+        docker network create "$net" || true
+    fi
+}
+
+# Создать необходимые директории
+ensure_dirs() {
+    mkdir -p logs recordings static || true
+}
+
 # Сборка образа
 build_image() {
+    prepare_env_defaults
+    ensure_network
+    ensure_dirs
     log "Сборка Docker образа..."
     docker-compose build --no-cache
     success "Образ успешно собран"
@@ -51,6 +75,9 @@ build_image() {
 
 # Запуск сервисов
 start_services() {
+    prepare_env_defaults
+    ensure_network
+    ensure_dirs
     log "Запуск сервисов..."
     docker-compose up -d
     success "Сервисы запущены"
