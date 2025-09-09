@@ -41,6 +41,15 @@ class CandidateReport:
     answered_questions: int = 0
     dialog_details: Optional[List[Dict]] = None
     
+    # Новые данные от Speakalka (полный отчет)
+    full_interview_report: Optional[Dict[str, Any]] = None
+    interview_transcript: Optional[str] = None
+    emotion_analysis_summary: Optional[Dict[str, Any]] = None
+    question_scores: Optional[List[Dict]] = None
+    technical_score: Optional[int] = None
+    communication_score: Optional[int] = None
+    culture_fit_score: Optional[int] = None
+    
     # Final Decision данные
     final_decision: Optional[str] = None
     decision_reason: Optional[str] = None
@@ -144,12 +153,17 @@ class HRReportDatabase:
                 report.interviewer_name = interview_row['interviewer_name']
                 report.interview_format = interview_row['interview_format']
             
-            # Interview Dialog данные
+            # Interview Dialog данные (включая новые колонки от Speakalka)
             dialog_query = """
             SELECT 
                 interviewer_notes, technical_score, communication_score, 
                 culture_fit_score, dialog_messages, duration_minutes,
-                started_at, ended_at, created_at
+                started_at, ended_at, created_at,
+                -- Новые колонки от Speakalka
+                full_interview_report,
+                interview_transcript,
+                emotion_analysis_summary,
+                question_scores
             FROM interview_dialogs
             WHERE candidate_id = $1
             """
@@ -167,6 +181,11 @@ class HRReportDatabase:
                 ]
                 report.interview_score = round(sum(s for s in scores if s > 0) / len([s for s in scores if s > 0])) if any(scores) else 0
                 
+                # Сохраняем индивидуальные оценки
+                report.technical_score = dialog_row['technical_score']
+                report.communication_score = dialog_row['communication_score']
+                report.culture_fit_score = dialog_row['culture_fit_score']
+                
                 # Считаем вопросы из dialog_messages
                 if dialog_row['dialog_messages'] and isinstance(dialog_row['dialog_messages'], list):
                     report.total_questions = len(dialog_row['dialog_messages'])
@@ -176,6 +195,18 @@ class HRReportDatabase:
                     report.total_questions = 0
                     report.answered_questions = 0
                     report.dialog_details = []
+                
+                # Новые данные от Speakalka
+                try:
+                    if dialog_row['full_interview_report']:
+                        report.full_interview_report = json.loads(dialog_row['full_interview_report'])
+                    if dialog_row['emotion_analysis_summary']:
+                        report.emotion_analysis_summary = json.loads(dialog_row['emotion_analysis_summary'])
+                    if dialog_row['question_scores']:
+                        report.question_scores = json.loads(dialog_row['question_scores'])
+                    report.interview_transcript = dialog_row['interview_transcript']
+                except (json.JSONDecodeError, TypeError):
+                    pass
             
             # Final Decision данные
             decision_query = """
