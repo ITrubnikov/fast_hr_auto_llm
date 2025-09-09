@@ -13,6 +13,8 @@ services:
     volumes:
       - zoo1-data:/data
       - zoo1-datalog:/datalog
+      
+
 
   zoo2:
     image: zookeeper:3.7.0
