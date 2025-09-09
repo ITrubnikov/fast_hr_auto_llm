@@ -23,7 +23,6 @@ RUN mkdir -p /app/models /app/output
 
 # Копируем исходный код
 COPY src/ src/
-COPY config/ config/
 
 # Создаем дополнительные директории
 RUN mkdir -p logs

@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+interview_results.json
+technical_interview_report.json
+*.log
+*.wav
+*.mp3
+*.flac
+
+# Interview results
+interview_results_*.json
+test_results_*.json
+
+# API keys
+.env
+*.key
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+
+# Audio files
+audio_examples/
+*.audio
+
+# Test results
+test_results.json
+mock_test_results.json
+real_production_results.json
+
+# Package build
+interview_system_package/
+*.egg-info/
+interview_report_*

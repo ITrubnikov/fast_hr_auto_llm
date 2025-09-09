@@ -6,7 +6,7 @@ services:
       - "18001:8001"
       - "18002:8002"
     volumes:
-      - ./3blok/onnx-asr/triton_model_repository:/models:ro
+      - ./onnx-asr/triton_model_repository:/models:ro
     command: >
       tritonserver
       --model-repository=/models
@@ -26,34 +26,33 @@ services:
 
   tts-api:
     build:
-      context: ./3blok/vosk-tts
+      context: ./vosk-tts
       dockerfile: Dockerfile
     ports:
       - "18200:8080"
     environment:
-      - TTS__TRITON_URL=localhost:8000
+      - TTS__TRITON_URL=asr-triton:8000
       - LOG_LEVEL=INFO
       - TTS_CLI_ONLY=0
     depends_on: []
     volumes:
-      - ./3blok/vosk-tts/output:/app/output
-      - ./3blok/vosk-tts/logs:/app/logs
+      - ./vosk-tts/output:/app/output
+      - ./vosk-tts/logs:/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-
   ui:
     build:
-      context: ./3blok/ui
+      context: ./ui
       dockerfile: Dockerfile
     ports:
       - "7860:7860"
     environment:
       - ASR_TRITON_URL=asr-triton:8000
-      - TTS_TRITON_URL=localhost:8000
+      - TTS_TRITON_URL=asr-triton:8000
       - TTS_API_URL=http://tts-api:8080
       - ONNX_ASR_SRC=/app/onnx_asr_src
       - OPENROUTER_API_KEY=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
@@ -61,7 +60,7 @@ services:
       - asr-triton
       - tts-api
     volumes:
-      - ./3blok/onnx-asr/src:/app/onnx_asr_src:ro
-      - ./3blok/onnx-asr/v2_vocab.txt:/app/onnx_asr_vocab/v2_vocab.txt:ro
+      - ./onnx-asr/src:/app/onnx_asr_src:ro
+      - ./onnx-asr/v2_vocab.txt:/app/onnx_asr_vocab/v2_vocab.txt:ro
 
 

@@ -1,0 +1,70 @@
+name: Speakalka CI
+
+on:
+  push:
+    paths:
+      - 'services/Speakalka/**'
+  pull_request:
+    paths:
+      - 'services/Speakalka/**'
+
+jobs:
+  setup-and-install:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies (PortAudio, FFmpeg, ALSA, build tools)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            portaudio19-dev \
+            libportaudiocpp0 \
+            ffmpeg \
+            alsa-utils \
+            libasound2-dev \
+            build-essential \
+            libsndfile1
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('services/Speakalka/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Create venv and install dependencies
+        working-directory: services/Speakalka
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip wheel setuptools
+          pip install -r requirements.txt
+
+      - name: Verify imports
+        working-directory: services/Speakalka
+        run: |
+          source .venv/bin/activate
+          python - <<'PY'
+            from importlib import import_module
+            modules = [
+                'pyaudio','soundfile','scipy','torch','torchaudio','fastapi','uvicorn',
+                'websockets','requests','ffmpeg','langchain','langgraph','kafka'
+            ]
+            for m in modules:
+                try:
+                    import_module(m)
+                    print(f"OK {m}")
+                except Exception as e:
+                    print(f"FAIL {m}: {e}")
+                    raise
+          PY
+
+

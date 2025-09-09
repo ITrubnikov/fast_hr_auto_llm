@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Аудио-клиент интервью</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .status.info { background: #d1ecf1; color: #0c5460; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        .question {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+            font-size: 18px;
+        }
+        .logs {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 15px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Аудио-клиент интервью</h1>
+        
+        <div id="status" class="status info">Готов к подключению</div>
+        
+        <div>
+            <button id="connectBtn" onclick="connect()">Подключиться</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled>Отключиться</button>
+            <button id="startAudioBtn" onclick="startAudio()" disabled>Начать аудио</button>
+            <button id="stopAudioBtn" onclick="stopAudio()" disabled>Остановить аудио</button>
+        </div>
+        
+        <div class="question" id="question">Вопрос появится здесь...</div>
+        
+        <h3>📊 Логи</h3>
+        <div id="logs" class="logs"></div>
+    </div>
+
+    <script>
+        const SAMPLE_RATE = 48000;
+        const CHUNK_MS = 20;
+        const CHANNELS = 1;
+        
+        let ws = null;
+        let audioCtx = null;
+        let micStream = null;
+        let captureNode = null;
+        let audioBuffer = null;
+        let connected = false;
+        let audioStarted = false;
+        let seq = 0;
+        
+        // Простой буфер для воспроизведения
+        class SimpleAudioBuffer {
+            constructor() {
+                this.buffers = [];
+                this.isPlaying = false;
+                this.currentSource = null;
+            }
+            
+            addAudioData(pcm16Data) {
+                // Конвертируем PCM16 в Float32
+                const float32Data = new Float32Array(pcm16Data.length);
+                for (let i = 0; i < pcm16Data.length; i++) {
+                    float32Data[i] = Math.max(-1, Math.min(1, pcm16Data[i] / 0x8000));
+                }
+                
+                this.buffers.push(float32Data);
+                log(`Добавлено в буфер: ${float32Data.length} сэмплов, всего буферов: ${this.buffers.length}`);
+                
+                // Если не играем, начинаем воспроизведение
+                if (!this.isPlaying) {
+                    this.playNext();
+                }
+            }
+            
+            async playNext() {
+                if (this.buffers.length === 0) {
+                    this.isPlaying = false;
+                    return;
+                }
+                
+                this.isPlaying = true;
+                const audioData = this.buffers.shift();
+                
+                try {
+                    // Создаем AudioBuffer
+                    const audioBuffer = audioCtx.createBuffer(1, audioData.length, 48000);
+                    audioBuffer.copyToChannel(audioData, 0);
+                    
+                    // Создаем источник
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(audioCtx.destination);
+                    
+                    // Обработчик завершения
+                    source.onended = () => {
+                        this.currentSource = null;
+                        this.playNext(); // Воспроизводим следующий буфер
+                    };
+                    
+                    this.currentSource = source;
+                    source.start();
+                    log(`🔊 Воспроизведение: ${audioData.length} сэмплов`);
+                    
+                } catch (error) {
+                    console.error('Ошибка воспроизведения:', error);
+                    log(`❌ Ошибка воспроизведения: ${error.message}`);
+                    this.isPlaying = false;
+                }
+            }
+            
+            stop() {
+                if (this.currentSource) {
+                    this.currentSource.stop();
+                    this.currentSource = null;
+                }
+                this.isPlaying = false;
+                this.buffers = [];
+            }
+        }
+        
+        function log(message) {
+            const logs = document.getElementById('logs');
+            const time = new Date().toLocaleTimeString();
+            logs.innerHTML += `[${time}] ${message}<br>`;
+            logs.scrollTop = logs.scrollHeight;
+            console.log(message);
+        }
+        
+        function updateStatus(message, type = 'info') {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+        }
+        
+        function makeFrame(payload, codec = 1) {
+            const header = new ArrayBuffer(14);
+            const dv = new DataView(header);
+            dv.setUint8(0, 1); // version
+            dv.setUint8(1, codec);
+            dv.setUint32(2, seq++, true);
+            const nowNs = BigInt(Math.floor(performance.timeOrigin * 1e6) + Math.floor(performance.now() * 1e6));
+            dv.setBigUint64(6, nowNs, true);
+            return new Blob([header, payload]);
+        }
+        
+        // Подключение к WebSocket
+        async function connect() {
+            if (connected) return;
+            
+            const roomId = new URLSearchParams(window.location.search).get('room');
+            if (!roomId) {
+                updateStatus('❌ Не указан ID комнаты в URL', 'error');
+                return;
+            }
+            
+            updateStatus('🔄 Подключение к WebSocket...', 'info');
+            log('Подключение к WebSocket...');
+            
+            try {
+                ws = new WebSocket(`ws://localhost:8000/ws/audio/${roomId}`);
+                ws.binaryType = 'arraybuffer';
+                
+                ws.onopen = () => {
+                    connected = true;
+                    updateStatus('✅ WebSocket подключен', 'success');
+                    log('WebSocket подключен');
+                    
+                    // Отправляем handshake
+                    ws.send(JSON.stringify({
+                        type: 'hello',
+                        codec: 'pcm16',
+                        sr: SAMPLE_RATE,
+                        ch: CHANNELS,
+                        chunk_ms: CHUNK_MS
+                    }));
+                    
+                    // Обновляем кнопки
+                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('disconnectBtn').disabled = false;
+                    document.getElementById('startAudioBtn').disabled = false;
+                };
+                
+                ws.onmessage = (msg) => {
+                    if (typeof msg.data === 'string') {
+                        // Текстовое сообщение
+                        const data = JSON.parse(msg.data);
+                        log(`Получено сообщение: ${msg.data}`);
+                        
+                        if (data.type === 'question') {
+                            document.getElementById('question').textContent = data.question;
+                            log(`Новый вопрос: ${data.question}`);
+                        }
+                    } else {
+                        // Бинарные данные (аудио)
+                        handleAudioData(msg.data);
+                    }
+                };
+                
+                ws.onclose = () => {
+                    connected = false;
+                    updateStatus('❌ WebSocket отключен', 'error');
+                    log('WebSocket отключен');
+                    
+                    // Обновляем кнопки
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                    document.getElementById('startAudioBtn').disabled = true;
+                    document.getElementById('stopAudioBtn').disabled = true;
+                };
+                
+                ws.onerror = (error) => {
+                    updateStatus('❌ Ошибка WebSocket', 'error');
+                    log(`Ошибка WebSocket: ${error}`);
+                };
+                
+            } catch (error) {
+                updateStatus('❌ Ошибка подключения', 'error');
+                log(`Ошибка подключения: ${error.message}`);
+            }
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            if (audioStarted) {
+                stopAudio();
+            }
+        }
+        
+        // Обработка аудио данных от сервера
+        function handleAudioData(buf) {
+            if (!audioBuffer) {
+                log('❌ Аудио буфер не инициализирован');
+                return;
+            }
+            
+            const dv = new DataView(buf);
+            const version = dv.getUint8(0);
+            const codec = dv.getUint8(1);
+            
+            // Проверяем формат: полный файл или чанки
+            if (buf.byteLength > 14) {
+                // Полный аудио-файл: version(1) + codec(1) + size(4) + data
+                const totalSize = dv.getUint32(2, true);
+                log(`Полный аудио-файл: версия=${version}, кодек=${codec}, размер=${totalSize} байт`);
+                
+                if (codec === 1) { // PCM16
+                    const pcm = new Int16Array(buf, 6); // Пропускаем заголовок 6 байт
+                    log(`Воспроизводим полный файл: ${pcm.length} сэмплов`);
+                    audioBuffer.addAudioData(pcm);
+                }
+            } else {
+                // Старый формат чанков (для обратной совместимости)
+                const seq = dv.getUint32(2, true);
+                const ptsNs = dv.getBigUint64(6, true);
+                
+                log(`Обработка чанка: версия=${version}, кодек=${codec}, seq=${seq}, размер=${buf.byteLength}`);
+                
+                if (codec === 1) { // PCM16
+                    const pcm = new Int16Array(buf, 14);
+                    audioBuffer.addAudioData(pcm);
+                }
+            }
+        }
+        
+        // Запуск аудио
+        async function startAudio() {
+            if (audioStarted) return;
+            
+            try {
+                updateStatus('🔄 Инициализация аудио...', 'info');
+                log('Инициализация аудио...');
+                
+                // Создаем AudioContext
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ 
+                    sampleRate: SAMPLE_RATE 
+                });
+                
+                // Возобновляем AudioContext если нужно
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+                
+                // Создаем буфер для воспроизведения
+                audioBuffer = new SimpleAudioBuffer();
+                
+                // Получаем доступ к микрофону
+                micStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: CHANNELS,
+                        sampleRate: SAMPLE_RATE,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: false
+                    }
+                });
+                
+                // Создаем AudioWorklet для захвата
+                await audioCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([`
+                    class CaptureProcessor extends AudioWorkletProcessor {
+                        static get parameterDescriptors() { return []; }
+                        
+                        constructor() {
+                            super();
+                            this.buf = [];
+                            this.samplesPerChunk = Math.round(${SAMPLE_RATE} * ${CHUNK_MS} / 1000);
+                            this.acc = 0;
+                        }
+                        
+                        process(inputs) {
+                            const input = inputs[0][0];
+                            if (!input) return true;
+                            
+                            if (!this.tmp) this.tmp = new Float32Array(this.samplesPerChunk);
+                            
+                            for (let i = 0; i < input.length; i++) {
+                                const v = input[i];
+                                this.tmp[this.acc++] = v;
+                                
+                                if (this.acc === this.samplesPerChunk) {
+                                    // Float32 [-1,1] -> PCM16LE
+                                    const pcm = new Int16Array(this.samplesPerChunk);
+                                    for (let j = 0; j < pcm.length; j++) {
+                                        let s = Math.max(-1, Math.min(1, this.tmp[j]));
+                                        pcm[j] = (s < 0 ? s * 0x8000 : s * 0x7FFF) | 0;
+                                    }
+                                    this.port.postMessage(pcm.buffer, [pcm.buffer]);
+                                    this.acc = 0;
+                                }
+                            }
+                            return true;
+                        }
+                    }
+                    registerProcessor('capture', CaptureProcessor);
+                `], { type: 'application/javascript' })));
+                
+                // Подключаем микрофон
+                const micSource = audioCtx.createMediaStreamSource(micStream);
+                captureNode = new AudioWorkletNode(audioCtx, 'capture');
+                micSource.connect(captureNode);
+                
+                // Отправляем аудио данные
+                captureNode.port.onmessage = (e) => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        const frame = makeFrame(e.data, 1);
+                        ws.send(frame);
+                    }
+                };
+                
+                audioStarted = true;
+                updateStatus('✅ Аудио запущено успешно', 'success');
+                log('Аудио запущено успешно');
+                
+                // Обновляем кнопки
+                document.getElementById('startAudioBtn').disabled = true;
+                document.getElementById('stopAudioBtn').disabled = false;
+                
+            } catch (error) {
+                updateStatus('❌ Ошибка запуска аудио', 'error');
+                log(`Ошибка запуска аудио: ${error.message}`);
+                console.error('Ошибка запуска аудио:', error);
+            }
+        }
+        
+        // Остановка аудио
+        function stopAudio() {
+            if (!audioStarted) return;
+            
+            try {
+                // Останавливаем захват
+                if (micStream) {
+                    micStream.getTracks().forEach(track => track.stop());
+                    micStream = null;
+                }
+                
+                if (captureNode) {
+                    captureNode.disconnect();
+                    captureNode = null;
+                }
+                
+                // Останавливаем воспроизведение
+                if (audioBuffer) {
+                    audioBuffer.stop();
+                    audioBuffer = null;
+                }
+                
+                if (audioCtx) {
+                    audioCtx.close();
+                    audioCtx = null;
+                }
+                
+                audioStarted = false;
+                updateStatus('✅ Аудио остановлено', 'info');
+                log('Аудио остановлено');
+                
+                // Обновляем кнопки
+                document.getElementById('startAudioBtn').disabled = false;
+                document.getElementById('stopAudioBtn').disabled = true;
+                
+            } catch (error) {
+                updateStatus('❌ Ошибка остановки аудио', 'error');
+                log(`Ошибка остановки аудио: ${error.message}`);
+            }
+        }
+        
+        // Автоматическое подключение при загрузке страницы
+        window.onload = () => {
+            log('Аудио-клиент готов к работе');
+        };
+    </script>
+</body>
+</html>
