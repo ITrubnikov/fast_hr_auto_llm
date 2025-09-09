@@ -435,6 +435,9 @@ class StreamlitReportApp:
                 tab_names.append("📅 Интервью")
             if report.interview_completed:
                 tab_names.append("🎤 Диалог")
+            # Добавляем новую вкладку для полного отчета Speakalka
+            if report.full_interview_report or report.interview_transcript:
+                tab_names.append("🤖 Полный отчет")
             if report.final_decision:
                 tab_names.append("✅ Решение")
             
@@ -530,6 +533,12 @@ class StreamlitReportApp:
                                 completion_rate = (report.answered_questions / report.total_questions) * 100
                                 st.metric("Полнота ответов", f"{completion_rate:.0f}%")
                     
+                    tab_idx += 1
+                
+                # Новая вкладка полного отчета от Speakalka
+                if report.full_interview_report or report.interview_transcript:
+                    with tabs[tab_idx]:
+                        self.render_speakalka_report_tab(report)
                     tab_idx += 1
                 
                 # Таб решения
@@ -678,6 +687,94 @@ class StreamlitReportApp:
             <p style="font-size: 12px;">Powered by Streamlit & PostgreSQL</p>
         </div>
         """, unsafe_allow_html=True)
+
+
+    def render_speakalka_report_tab(self, report: CandidateReport):
+        """Отрисовка вкладки с полным отчетом от Speakalka"""
+        st.markdown("### 🤖 Полный отчет интервью от Speakalka")
+        
+        # Основные метрики
+        if report.technical_score or report.communication_score or report.culture_fit_score:
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                score = report.technical_score or 0
+                color = "🟢" if score >= 7 else "🟡" if score >= 5 else "🔴"
+                st.metric("🔧 Технические навыки", f"{score}/10", delta=None)
+                
+            with col2:
+                score = report.communication_score or 0
+                color = "🟢" if score >= 7 else "🟡" if score >= 5 else "🔴"
+                st.metric("💬 Коммуникация", f"{score}/10", delta=None)
+                
+            with col3:
+                score = report.culture_fit_score or 0
+                color = "🟢" if score >= 7 else "🟡" if score >= 5 else "🔴"
+                st.metric("🎯 Культурное соответствие", f"{score}/10", delta=None)
+        
+        # Анализ эмоций
+        if report.emotion_analysis_summary:
+            st.markdown("### 🎭 Анализ эмоционального состояния")
+            emotions = report.emotion_analysis_summary
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                # Позитивные эмоции
+                st.markdown("**✅ Позитивные показатели:**")
+                for emotion in ['enthusiasm', 'confidence', 'happiness']:
+                    value = emotions.get(emotion, 0)
+                    if value > 0:
+                        percentage = int(value * 100) if value <= 1 else int(value)
+                        emoji = "🎉" if emotion == "enthusiasm" else "💪" if emotion == "confidence" else "😊"
+                        st.progress(percentage/100, text=f"{emoji} {emotion.capitalize()}: {percentage}%")
+            
+            with col2:
+                # Негативные эмоции
+                st.markdown("**⚠️ Области внимания:**")
+                for emotion in ['anxiety', 'fear', 'nervousness']:
+                    value = emotions.get(emotion, 0)
+                    if value > 0:
+                        percentage = int(value * 100) if value <= 1 else int(value)
+                        emoji = "😰" if emotion == "anxiety" else "😨" if emotion == "fear" else "😅"
+                        st.progress(percentage/100, text=f"{emoji} {emotion.capitalize()}: {percentage}%")
+        
+        # Детальные оценки по вопросам
+        if report.question_scores:
+            st.markdown("### 📊 Оценки по вопросам")
+            
+            for i, q_data in enumerate(report.question_scores, 1):
+                with st.expander(f"Вопрос {i}: {q_data.get('question', 'Вопрос не указан')[:60]}..."):
+                    col1, col2 = st.columns([3, 1])
+                    
+                    with col1:
+                        st.markdown(f"**❓ Вопрос:** {q_data.get('question', 'Не указан')}")
+                        st.markdown(f"**💬 Ответ кандидата:**")
+                        st.info(q_data.get('answer', 'Ответ не получен'))
+                        
+                        if q_data.get('evaluation'):
+                            st.markdown(f"**📝 Комментарий ИИ:**")
+                            st.success(q_data.get('evaluation'))
+                    
+                    with col2:
+                        score = q_data.get('score', 0)
+                        color = "🟢" if score >= 7 else "🟡" if score >= 5 else "🔴"
+                        st.metric("Оценка", f"{score}/10")
+                        
+                        topic = q_data.get('topic', '').replace('_', ' ').title()
+                        if topic:
+                            st.caption(f"Тема: {topic}")
+        
+        # Полный транскрипт интервью
+        if report.interview_transcript:
+            st.markdown("### 📄 Полный транскрипт интервью")
+            with st.expander("🔍 Показать полный текст интервью"):
+                st.markdown(f"```\n{report.interview_transcript}\n```")
+        
+        # Структурированный отчет
+        if report.full_interview_report:
+            st.markdown("### 📋 Структурированные данные")
+            with st.expander("🔧 Показать JSON отчет"):
+                st.json(report.full_interview_report)
 
 
 def main():
