@@ -139,6 +139,7 @@ jobs:
             sudo mkdir -p ./3blok/vosk-tts/logs ./3blok/vosk-tts/output
             sudo chown -R $USER:$USER ./3blok/vosk-tts/logs ./3blok/vosk-tts/output
             # Поднятие/обновление сервисов 3blok
-            sudo docker compose --project-directory "${{ secrets.DEPLOY_PATH }}" -f ./3blok/docker-compose.yml down || true
-            docker compose --project-directory "${{ secrets.DEPLOY_PATH }}" -f ./3blok/docker-compose.yml pull || true
-            docker compose --project-directory "${{ secrets.DEPLOY_PATH }}" -f ./3blok/docker-compose.yml up -d --build
+            cd ./3blok
+            sudo docker compose down || true
+            docker compose pull || true
+            docker compose up -d --build
